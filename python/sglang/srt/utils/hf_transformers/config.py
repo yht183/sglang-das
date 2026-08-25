@@ -266,6 +266,20 @@ def get_config(
         model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
     )
 
+    # Text-only Qwen3.5/3.8 MoE checkpoints may load as HF's
+    # Qwen3_5MoeTextConfig when AutoConfig already registered that type.
+    # Re-wrap with sglang's config so layers_block_type / norm_topk_prob exist.
+    if getattr(config, "model_type", None) == "qwen3_5_moe_text":
+        from sglang.srt.configs.qwen3_5 import Qwen3_5MoeTextConfig
+
+        if not isinstance(config, Qwen3_5MoeTextConfig):
+            config = Qwen3_5MoeTextConfig(**config.to_dict())
+    elif getattr(config, "model_type", None) == "qwen3_5_text":
+        from sglang.srt.configs.qwen3_5 import Qwen3_5TextConfig
+
+        if not isinstance(config, Qwen3_5TextConfig):
+            config = Qwen3_5TextConfig(**config.to_dict())
+
     if model_override_args:
         # A plain update() setattrs a dict-valued override straight onto the
         # config, so '{"text_config": {...}}' on a VLM would replace the whole

@@ -314,11 +314,32 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
         layer._original_shapes["w2_weight_scale"] = tuple(w2_scale.shape)
         layer._original_shapes["w13_weight_scale"] = tuple(w13_scale.shape)
 
-        if self.w13_zp is None:
-            self.w13_zp = torch.ones((num_experts, 2 * intermediate_size_per_partition, num_groups_w13 // 2 ), dtype=torch.uint8) * 136
-        if self.w2_zp is None:
-            self.w2_zp = torch.ones((num_experts, hidden_size, num_groups_w13 // 2), dtype=torch.uint8) * 136
+        # Symmetric W4A16: do NOT fabricate ZP. Triton fused_moe treats
+        # B_zp is not None as asymmetric (has_zp=True); vLLM's Triton fallback
+        # passes w1_zp/w2_zp=None and uses the kernel's zp=8. Fabricating a
+        # host-side dummy (136) here previously destroyed MoE accuracy.
         if not self.sym:
+            if self.w13_zp is None:
+                self.w13_zp = (
+                    torch.ones(
+                        (
+                            num_experts,
+                            2 * intermediate_size_per_partition,
+                            num_groups_w13 // 2,
+                        ),
+                        dtype=torch.uint8,
+                    )
+                    * 136
+                )
+            if self.w2_zp is None:
+                # w2 groups must use num_groups_w2, not num_groups_w13.
+                self.w2_zp = (
+                    torch.ones(
+                        (num_experts, hidden_size, num_groups_w2 // 2),
+                        dtype=torch.uint8,
+                    )
+                    * 136
+                )
             layer._original_shapes["w13_weight_zero_point"] = w13_qzeros.shape
             layer._original_shapes["w2_weight_zero_point"] = tuple(w2_qzeros.shape)
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
@@ -585,6 +606,10 @@ class CompressedTensorsWNA16TritonMoE(CompressedTensorsWNA16MoE):
     def get_triton_quant_info(self, layer):
         from sglang.srt.layers.moe.moe_runner.triton import TritonMoeQuantInfo
 
+        # Align with vLLM Triton W4A16 MoE: symmetric → zp=None.
+        w13_zp = None if self.sym else self.w13_zp
+        w2_zp = None if self.sym else self.w2_zp
+
         return TritonMoeQuantInfo(
             w13_weight=layer.w13_weight_packed,
             w2_weight=layer.w2_weight_packed,
@@ -592,8 +617,8 @@ class CompressedTensorsWNA16TritonMoE(CompressedTensorsWNA16MoE):
             w13_scale=layer.w13_weight_scale,
             w2_scale=layer.w2_weight_scale,
             block_shape=[0, self.group_size],
-            w13_zp=self.w13_zp,
-            w2_zp=self.w2_zp,
+            w13_zp=w13_zp,
+            w2_zp=w2_zp,
         )
 
     def apply_weights(

@@ -1455,7 +1455,16 @@ class Qwen3_5ForCausalLM(nn.Module):
 
         # Decoder layers
         def get_layer(idx: int, prefix: str):
-            layer_type = config.layers_block_type[idx]
+            # sglang Qwen3NextConfig exposes layers_block_type ("attention"/
+            # "linear_attention"). HF text-only Qwen3.5/3.8 configs may only
+            # have layer_types with "full_attention" / "linear_attention".
+            if hasattr(config, "layers_block_type"):
+                layer_type = config.layers_block_type[idx]
+            else:
+                raw = config.layer_types[idx]
+                layer_type = (
+                    "attention" if raw in ("full_attention", "attention") else raw
+                )
             layer_class = ALL_DECODER_LAYER_TYPES[layer_type]
             if layer_type == "attention":
                 prefix = add_prefix("self_attn", prefix)
